@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>漏斗图生成器</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#ffffff; --fg:#000000; --muted:#6b7280; --border:#e5e7eb; --accent:#0d6efd;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC";}
+  .wrap{max-width:1200px;margin:0 auto;padding:16px;}
+  h1{font-size:20px;margin:0 0 12px;}
+  .grid{display:grid;gap:12px;}
+  .row{display:flex;flex-wrap:wrap;gap:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;}
+  .row .group{display:flex;align-items:center;gap:8px}
+  .row input[type="text"], .row input[type="number"], .row select{
+    background:#ffffff;border:1px solid var(--border);color:var(--fg);border-radius:8px;padding:8px 10px;outline:none;
+  }
+  .row input[type="color"]{width:40px;height:32px;border:0;background:transparent;padding:0}
+  button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:600;}
+  button.secondary{background:#eef2f7;color:#111;border:1px solid var(--border)}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left}
+  thead th{font-weight:700;background:#f7f9fc}
+  .canvas-card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:10px}
+  .hint{color:var(--muted);font-size:12px}
+  .spacer{flex:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>漏斗图生成器（网页版）</h1>
+
+  <div class="grid">
+    <!-- 排 1：标题、字体、字号 -->
+    <div class="row">
+      <div class="group">
+        <label>标题</label>
+        <input id="title" type="text" value="5月" />
+      </div>
+      <div class="group">
+        <label>字体</label>
+        <select id="fontFamily">
+          <option>system-ui</option>
+          <option>-apple-system</option>
+          <option>PingFang SC</option>
+          <option>Microsoft YaHei</option>
+          <option>Noto Sans CJK SC</option>
+          <option>SimHei</option>
+          <option>Arial</option>
+          <option>Helvetica</option>
+          <option>DejaVu Sans</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>字号(px)</label>
+        <input id="fontSize" type="number" min="8" step="1" value="14" />
+      </div>
+      <div class="spacer"></div>
+      <div class="group">
+        <button id="sample" class="secondary">示例填充</button>
+      </div>
+    </div>
+
+    <!-- 排 2：线条与布局参数（outerPad 默认 0，允许 0） -->
+    <div class="row">
+      <div class="group">
+        <label>线条颜色</label>
+        <input id="lineColor" type="color" value="#333333" />
+      </div>
+      <div class="group">
+        <label>漏斗宽度(scale)</label>
+        <input id="scale" type="number" step="0.1" min="0.1" value="0.3" />
+      </div>
+      <div class="group">
+        <label>外侧对齐边距(px)</label>
+        <input id="outerPad" type="number" step="5" min="0" value="0" />
+      </div>
+      <div class="group">
+        <label>文字间距(px)</label>
+        <input id="textGap" type="number" step="2" min="4" value="8" />
+      </div>
+      <div class="spacer"></div>
+      <div class="group">
+        <button id="render">绘制 / 更新</button>
+      </div>
+    </div>
+
+    <!-- 排 3：导出 -->
+    <div class="row">
+      <div class="group">
+        <button id="downloadPNG" class="secondary">下载 PNG</button>
+        <button id="downloadSVG" class="secondary">下载 SVG</button>
+      </div>
+      <div class="group hint">Love Mommy</div>
+    </div>
+  </div>
+
+  <!-- 数据表 -->
+  <div style="margin:14px 0 10px;display:flex;gap:10px;">
+    <button id="addRow" class="secondary">添加阶段</button>
+    <button id="removeRow" class="secondary">删除最后一行</button>
+  </div>
+  <table id="dataTable">
+    <thead>
+      <tr>
+        <th style="width:40%;">阶段标签</th>
+        <th style="width:30%;">数值</th>
+        <th style="width:30%;">模块颜色（用于第 i 个梯形；最后一行颜色不使用）</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <!-- 画布 -->
+  <div class="canvas-card" style="margin-top:12px;">
+    <svg id="svg" width="100%" height="720" viewBox="-600 -60 1200 860" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<script>
+const tbody = document.getElementById('tbody');
+const svg = document.getElementById('svg');
+
+// 简单的数字解析（支持 0）
+const numOrDefault = (inputEl, defVal) => {
+  const n = Number(inputEl.value);
+  return Number.isFinite(n) ? n : defVal;
+};
+
+const el = id => document.getElementById(id);
+const titleInput = el('title');
+const fontFamilySel = el('fontFamily');
+const fontSizeInput = el('fontSize');
+const lineColorInput = el('lineColor');
+const scaleInput = el('scale');
+const outerPadInput = el('outerPad');
+const textGapInput = el('textGap');
+
+el('addRow').onclick = () => addRow();
+el('removeRow').onclick = () => { if (tbody.rows.length>0) tbody.deleteRow(-1); };
+el('sample').onclick = fillSample;
+el('render').onclick = render;
+el('downloadPNG').onclick = downloadPNG;
+el('downloadSVG').onclick = () => downloadSVG(svg, 'funnel.svg');
+
+// 初始 5 行
+for(let i=0;i<5;i++) addRow();
+
+function addRow(label='', value='', color='') {
+  const tr = document.createElement('tr');
+  const td1 = document.createElement('td');
+  const td2 = document.createElement('td');
+  const td3 = document.createElement('td');
+
+  const in1 = document.createElement('input');
+  in1.type='text'; in1.value=label; in1.placeholder='例如：安装';
+  in1.style.width='96%';
+
+  const in2 = document.createElement('input');
+  in2.type='number'; in2.step='1'; in2.value=value; in2.placeholder='数值';
+  in2.style.width='96%';
+
+  const wrap = document.createElement('div');
+  wrap.style.display='flex'; wrap.style.alignItems='center'; wrap.style.gap='10px';
+  const in3 = document.createElement('input');
+  in3.type='text'; in3.value=color; in3.placeholder='#RRGGBB 或空';
+  in3.style.width='120px';
+  const pick = document.createElement('input');
+  pick.type='color'; pick.value=color||'#ffffff';
+  pick.oninput = () => { in3.value = pick.value; };
+  wrap.appendChild(in3); wrap.appendChild(pick);
+
+  td1.appendChild(in1); td2.appendChild(in2); td3.appendChild(wrap);
+  tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+  tbody.appendChild(tr);
+}
+
+function getData(){
+  const labels=[], values=[], colors=[];
+  [...tbody.rows].forEach(tr=>{
+    const [labEl,valEl,colorWrap] = [...tr.querySelectorAll('input')];
+    const lab = labEl.value.trim();
+    const v = valEl.value.trim();
+    const col = colorWrap.value.trim();
+    if(lab==='' && v==='') return;
+    if(lab==='') throw new Error('存在未填写标签的行');
+    if(v==='') throw new Error(`【${lab}】缺少数值`);
+    const num = Number(v);
+    if(!Number.isFinite(num) || num<0) throw new Error(`【${lab}】的数值必须为非负数`);
+    labels.push(lab);
+    values.push(num);
+    colors.push(col);
+  });
+  if(labels.length<2) throw new Error('至少需要两行数据');
+  return {labels, values, colors};
+}
+
+function fillSample(){
+  tbody.innerHTML='';
+  [
+    ['安装','82648','#9adbed'],
+    ['注册','24559','#66c2d7'],
+    ['进件','27769','#3b89b7'],
+    ['授信','4855','#2c5f88'],
+    ['贷款','1471','']
+  ].forEach(r=>addRow(...r));
+  render();
+}
+
+function computeConversions(values){
+  const conv = [100];
+  for(let i=1;i<values.length;i++){
+    const prev = values[i-1];
+    conv.push(prev===0 ? null : values[i]/prev*100);
+  }
+  return conv;
+}
+
+function render(){
+  try{
+    const {labels, values, colors} = getData();
+    const title = titleInput.value.trim();
+    const fontFamily = fontFamilySel.value;
+    const fontSize = Math.max(8, numOrDefault(fontSizeInput, 14));
+    const lineColor = lineColorInput.value || '#333333';
+    const scale    = Math.max(0.1, numOrDefault(scaleInput, 0.3)); // 默认 0.3
+    const outerPad = Math.max(0,   numOrDefault(outerPadInput, 0)); // 允许 0，默认 0
+    const textGap  = Math.max(4,   numOrDefault(textGapInput, 8));  // 默认 8
+
+    // 清空 SVG
+    while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+    // 样式需提前插入，确保可被克隆导出
+    const style = document.createElementNS("http://www.w3.org/2000/svg","style");
+    svg.appendChild(style);
+
+    // 所有图形放到 <g id="scene"> 中，导出时根据其 bbox 裁剪
+    const scene = document.createElementNS("http://www.w3.org/2000/svg","g");
+    scene.setAttribute('id', 'scene');
+    svg.appendChild(scene);
+
+    // 坐标和参数（像素）
+    const topWidthPx = 800 * scale;
+    const topVal = (values[0]!==0?values[0]:Math.max(...values,1));
+    const widths = values.map(v=> (topVal===0?0:(v/topVal))*topWidthPx );
+    const N = values.length;
+    const h = 80;
+    const topY = 40;
+    const yTop = (i)=> topY + i*h;
+    const yBot = (i)=> topY + (i+1)*h;
+
+    const maxWidth = Math.max(...widths);
+    const leftEndX  = -(maxWidth/2 + outerPad);
+    const rightEndX = +(maxWidth/2 + outerPad);
+
+    // 屏幕显示用的 viewBox（导出时不使用）
+    const xExtent = Math.max(Math.abs(leftEndX - textGap), Math.abs(rightEndX + textGap)) + 60;
+    const vbX = -xExtent, vbW = xExtent*2;
+    const vbY = 0, vbH = topY + N*h + 120;
+    svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`);
+
+    // 文本样式（同时每个 <text> 也会显式 fill）
+    style.textContent = `
+      text{ fill:#000000; font-family:${CSS.escape(fontFamily)}; font-size:${fontSize}px; }
+      .muted{ fill:#6b7280; }
+    `;
+
+    // 画梯形
+    for(let i=0;i<N-1;i++){
+      const wTop = widths[i], wBot = widths[i+1];
+      const y1 = yTop(i), y2 = yBot(i);
+      const poly = document.createElementNS("http://www.w3.org/2000/svg","polygon");
+      const pts = [
+        [-wTop/2, y1], [wTop/2, y1],
+        [ wBot/2, y2], [-wBot/2, y2]
+      ].map(p=>p.join(',')).join(' ');
+      poly.setAttribute('points', pts);
+      poly.setAttribute('fill', colors[i] ? colors[i] : '#eaf2ff');
+      poly.setAttribute('stroke','#d0d7e2');
+      poly.setAttribute('stroke-width','1');
+      scene.appendChild(poly);
+    }
+
+    // 转化率
+    const conv = computeConversions(values);
+
+    // 顶边：带文字横线（左：百分比；右：标签+数值）
+    for(let i=0;i<N;i++){
+      const y = yTop(i);
+      const halfTop = widths[i]/2;
+
+      // 左线
+      line(scene, -halfTop, y, leftEndX, y, lineColor);
+      const p = conv[i];
+      const pTxt = (p==null || !isFinite(p)) ? '-' : (p.toFixed(2)+'%');
+      text(scene, leftEndX - textGap, y, pTxt, {anchor:'end'});
+
+      // 右线
+      line(scene, halfTop, y, rightEndX, y, lineColor);
+      text(scene, rightEndX + textGap, y - 0.24*h, labels[i], {anchor:'start'});   // 标签在上
+      text(scene, rightEndX + textGap, y, formatNumber(values[i]), {anchor:'start'});
+    }
+
+    // 底边：无文字横线（最后一段不画）
+    for(let i=0;i<N-1;i++){
+      const y = yBot(i);
+      const halfBot = widths[i+1]/2;
+      line(scene, -halfBot, y, leftEndX, y, lineColor);
+      line(scene,  halfBot, y, rightEndX, y, lineColor);
+    }
+
+    // 标题
+    if(title){
+      text(scene, 0, topY - 18, title, {anchor:'middle', size: fontSize+4});
+    }
+
+    // —— 内部函数（添加到 scene） ——
+    function line(target,x1,y1,x2,y2,color){
+      const L = document.createElementNS("http://www.w3.org/2000/svg","line");
+      L.setAttribute('x1',x1); L.setAttribute('y1',y1);
+      L.setAttribute('x2',x2); L.setAttribute('y2',y2);
+      L.setAttribute('stroke', color || '#333');
+      L.setAttribute('stroke-width','2');
+      target.appendChild(L);
+    }
+    function text(target,x,y,txt,{anchor='start',cls='',size=null}={}){
+      const T = document.createElementNS("http://www.w3.org/2000/svg","text");
+      T.setAttribute('x',x); T.setAttribute('y',y);
+      T.setAttribute('text-anchor',{start:'start',middle:'middle',end:'end'}[anchor]);
+      T.setAttribute('fill', '#000000'); // 显式黑色，导出 PNG 时不丢失
+      if(cls) T.setAttribute('class',cls);
+      if(size) T.setAttribute('font-size', size);
+      T.textContent = txt;
+      target.appendChild(T);
+    }
+    function formatNumber(n){ return n.toLocaleString('en-US'); }
+
+  }catch(err){
+    alert(err.message || String(err));
+  }
+}
+
+// —— PNG 导出：按 scene 的边界自动裁剪 —— 
+async function downloadPNG(){
+  const scene = document.getElementById('scene');
+  if(!scene){ alert('请先点击“绘制 / 更新”。'); return; }
+
+  // 计算内容边界并增加少量留白
+  const bbox = scene.getBBox();
+  const pad = 8; // 导出外边距
+  const ex = bbox.x - pad, ey = bbox.y - pad;
+  const ew = bbox.width + pad*2, eh = bbox.height + pad*2;
+
+  // 克隆一份 SVG（包含 style 和 scene）
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  clone.setAttribute('width', ew);
+  clone.setAttribute('height', eh);
+  clone.setAttribute('viewBox', `${ex} ${ey} ${ew} ${eh}`);
+
+  // 白底（放在 scene 之前）
+  const bg = document.createElementNS("http://www.w3.org/2000/svg","rect");
+  bg.setAttribute('x', ex); bg.setAttribute('y', ey);
+  bg.setAttribute('width', ew); bg.setAttribute('height', eh);
+  bg.setAttribute('fill', '#ffffff');
+  const cloneScene = clone.querySelector('#scene');
+  clone.insertBefore(bg, cloneScene);
+
+  // 序列化并绘制到画布（2x 清晰度）
+  const serializer = new XMLSerializer();
+  const svgStr = serializer.serializeToString(clone);
+  const blob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+
+  const img = new Image();
+  await new Promise(res => { img.onload = res; img.src = url; });
+
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth * scale;
+  canvas.height = img.naturalHeight * scale;
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  URL.revokeObjectURL(url);
+
+  canvas.toBlob(b=>{
+    const a = document.createElement('a');
+    a.download = 'funnel.png';
+    a.href = URL.createObjectURL(b);
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 500);
+  }, 'image/png', 0.96);
+}
+
+function downloadSVG(svgEl, filename){
+  const serializer = new XMLSerializer();
+  const str = serializer.serializeToString(svgEl);
+  const blob = new Blob([str], {type:'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 500);
+}
+
+// 首次渲染
+render();
+</script>
+</body>
+</html>
